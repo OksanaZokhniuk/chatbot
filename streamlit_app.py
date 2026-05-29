@@ -8,6 +8,7 @@ from llama_index.core import (
     SimpleDirectoryReader,
     Settings,
 )
+
 from llama_index.llms.openai import OpenAI as LlamaOpenAI
 from llama_index.embeddings.openai import OpenAIEmbedding
 
@@ -17,25 +18,26 @@ from llama_index.embeddings.openai import OpenAIEmbedding
 st.set_page_config(page_title="RAG Chatbot", page_icon="💬")
 
 st.title("💬 Chat with Your Documents")
+
 st.write(
-    "Upload documents and ask questions about them using RAG + LlamaIndex."
+    "Upload PDF, TXT, or DOCX files and ask questions about them."
 )
 
 # -------------------------
 # API KEY
 # -------------------------
-openai_api_key = st.text_input("OpenAI API Key", type="password")
+openai_api_key = st.text_input(
+    "OpenAI API Key",
+    type="password"
+)
 
 if not openai_api_key:
     st.info("Please enter your OpenAI API key.")
     st.stop()
 
 # -------------------------
-# OPENAI CLIENT
+# LLAMAINDEX SETTINGS
 # -------------------------
-client = OpenAI(api_key=openai_api_key)
-
-# Configure LlamaIndex
 Settings.llm = LlamaOpenAI(
     model="gpt-3.5-turbo",
     api_key=openai_api_key,
@@ -56,89 +58,108 @@ if "query_engine" not in st.session_state:
     st.session_state.query_engine = None
 
 # -------------------------
-# FILE UPLOAD
+# FILE UPLOADER
 # -------------------------
 uploaded_files = st.file_uploader(
     "Upload documents",
     type=["pdf", "txt", "docx"],
-    accept_multiple_files=True,
+    accept_multiple_files=True
 )
 
 # -------------------------
-# BUILD VECTOR INDEX
+# PROCESS DOCUMENTS
 # -------------------------
 if uploaded_files and st.button("Process Documents"):
 
-    with st.spinner("Indexing documents..."):
+    with st.spinner("Processing documents..."):
 
-        # Create temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
 
             # Save uploaded files
             for uploaded_file in uploaded_files:
-                file_path = os.path.join(temp_dir, uploaded_file.name)
+
+                file_path = os.path.join(
+                    temp_dir,
+                    uploaded_file.name
+                )
 
                 with open(file_path, "wb") as f:
                     f.write(uploaded_file.getbuffer())
 
             # Load documents
-            documents = SimpleDirectoryReader(temp_dir).load_data()
+            documents = SimpleDirectoryReader(
+                temp_dir
+            ).load_data()
 
             # Create vector index
-            index = VectorStoreIndex.from_documents(documents)
-
-            # Create query engine
-            st.session_state.query_engine = index.as_query_engine(
-                similarity_top_k=3
+            index = VectorStoreIndex.from_documents(
+                documents
             )
 
-    st.success("Documents indexed successfully!")
+            # Create query engine
+            st.session_state.query_engine = (
+                index.as_query_engine(
+                    similarity_top_k=3
+                )
+            )
+
+    st.success("Documents processed successfully!")
 
 # -------------------------
-# CHAT HISTORY
+# DISPLAY CHAT HISTORY
 # -------------------------
 for message in st.session_state.messages:
+
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
 # -------------------------
 # CHAT INPUT
 # -------------------------
-if prompt := st.chat_input("Ask a question about your documents"):
+prompt = st.chat_input(
+    "Ask a question about your documents"
+)
+
+if prompt:
 
     # Save user message
     st.session_state.messages.append(
-        {"role": "user", "content": prompt}
+        {
+            "role": "user",
+            "content": prompt
+        }
     )
 
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Ensure docs uploaded
+    # Check if docs processed
     if st.session_state.query_engine is None:
 
-        response = "Please upload and process documents first."
-
-        with st.chat_message("assistant"):
-            st.markdown(response)
-
-        st.session_state.messages.append(
-            {"role": "assistant", "content": response}
+        response = (
+            "Please upload and process documents first."
         )
 
     else:
 
-        # Query the RAG engine
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
+        with st.spinner("Thinking..."):
 
-                result = st.session_state.query_engine.query(prompt)
+            result = (
+                st.session_state
+                .query_engine
+                .query(prompt)
+            )
 
-                response = str(result)
+            response = str(result)
 
-                st.markdown(response)
+    # Display assistant response
+    with st.chat_message("assistant"):
+        st.markdown(response)
 
-        # Save assistant response
-        st.session_state.messages.append(
-            {"role": "assistant", "content": response}
-        )
+    # Save assistant response
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": response
+        }
+    )
