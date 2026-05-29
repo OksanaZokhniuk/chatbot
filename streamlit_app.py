@@ -1,56 +1,144 @@
+import os
+import tempfile
 import streamlit as st
 from openai import OpenAI
 
-# Show title and description.
-st.title("💬 Chatbot")
+from llama_index.core import (
+    VectorStoreIndex,
+    SimpleDirectoryReader,
+    Settings,
+)
+from llama_index.llms.openai import OpenAI as LlamaOpenAI
+from llama_index.embeddings.openai import OpenAIEmbedding
+
+# -------------------------
+# PAGE CONFIG
+# -------------------------
+st.set_page_config(page_title="RAG Chatbot", page_icon="💬")
+
+st.title("💬 Chat with Your Documents")
 st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
+    "Upload documents and ask questions about them using RAG + LlamaIndex."
 )
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
+# -------------------------
+# API KEY
+# -------------------------
 openai_api_key = st.text_input("OpenAI API Key", type="password")
+
 if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+    st.info("Please enter your OpenAI API key.")
+    st.stop()
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+# -------------------------
+# OPENAI CLIENT
+# -------------------------
+client = OpenAI(api_key=openai_api_key)
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+# Configure LlamaIndex
+Settings.llm = LlamaOpenAI(
+    model="gpt-3.5-turbo",
+    api_key=openai_api_key,
+)
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+Settings.embed_model = OpenAIEmbedding(
+    model="text-embedding-3-small",
+    api_key=openai_api_key,
+)
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+# -------------------------
+# SESSION STATE
+# -------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+if "query_engine" not in st.session_state:
+    st.session_state.query_engine = None
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
+# -------------------------
+# FILE UPLOAD
+# -------------------------
+uploaded_files = st.file_uploader(
+    "Upload documents",
+    type=["pdf", "txt", "docx"],
+    accept_multiple_files=True,
+)
+
+# -------------------------
+# BUILD VECTOR INDEX
+# -------------------------
+if uploaded_files and st.button("Process Documents"):
+
+    with st.spinner("Indexing documents..."):
+
+        # Create temporary directory
+        with tempfile.TemporaryDirectory() as temp_dir:
+
+            # Save uploaded files
+            for uploaded_file in uploaded_files:
+                file_path = os.path.join(temp_dir, uploaded_file.name)
+
+                with open(file_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+
+            # Load documents
+            documents = SimpleDirectoryReader(temp_dir).load_data()
+
+            # Create vector index
+            index = VectorStoreIndex.from_documents(documents)
+
+            # Create query engine
+            st.session_state.query_engine = index.as_query_engine(
+                similarity_top_k=3
+            )
+
+    st.success("Documents indexed successfully!")
+
+# -------------------------
+# CHAT HISTORY
+# -------------------------
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# -------------------------
+# CHAT INPUT
+# -------------------------
+if prompt := st.chat_input("Ask a question about your documents"):
+
+    # Save user message
+    st.session_state.messages.append(
+        {"role": "user", "content": prompt}
+    )
+
+    with st.chat_message("user"):
+        st.markdown(prompt)
+
+    # Ensure docs uploaded
+    if st.session_state.query_engine is None:
+
+        response = "Please upload and process documents first."
+
+        with st.chat_message("assistant"):
+            st.markdown(response)
+
+        st.session_state.messages.append(
+            {"role": "assistant", "content": response}
         )
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
+    else:
+
+        # Query the RAG engine
         with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+            with st.spinner("Thinking..."):
+
+                result = st.session_state.query_engine.query(prompt)
+
+                response = str(result)
+
+                st.markdown(response)
+
+        # Save assistant response
+        st.session_state.messages.append(
+            {"role": "assistant", "content": response}
+        )
